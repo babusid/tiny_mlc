@@ -5,10 +5,27 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beartype>=0.22.9",
     "cffi>=2.0.0",
+    "docformatter>=1.7.8",
     "mlir>=0.0.1",
     "mlx>=0.31.2",
     "numpy>=2.4.6",
     "ruff>=0.15.17",
     "typing>=3.10.0.0",
 ]
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.docformatter]
+recursive = true
+in-place = true
+wrap-summaries = 100
+wrap-descriptions = 100

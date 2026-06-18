@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from numpy import ndarray
 
+
 class Tensor:
     """A Tensor is a node in a computational graph, representing a multi-dimensional array.
     Tensors are the inputs to tensor operations, which output new tensors. A sequence of Tensor
@@ -20,11 +21,21 @@ class Tensor:
     # Tensor label
     label: str
 
+    # Tensor shape
+    # Can be inferred from the inputs and the operation
+    # or can be set explicitly for leaf nodes (input, constant)
+    shape: tuple[int, ...]
+
+    # Tensor dtype
+    dtype: str
+
     def __init__(
         self,
         inputs: list["Tensor"],
         op: "TensorOp",
+        shape: tuple[int, ...],
         label: str | None = None,
+        dtype: str = "float32",
     ):
         self.inputs = inputs
         self.op = op
@@ -32,6 +43,13 @@ class Tensor:
             self.label = self.op.__class__.__name__
         else:
             self.label = label
+
+        self.shape = shape
+
+        # TODO: support more dtypes
+        # TODO: inheirit dtypes from input tensors
+        # TODO: dtype promotion logic for mismatched input tensor
+        self.dtype = "float32"
 
     @override
     def __str__(self):
@@ -43,32 +61,27 @@ class Tensor:
 
     def __add__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            otensor = Constant(other)(inputs=[], label=str(other))
-            return add(self, otensor)
+            other = constant(other, label=str(other))
         return add(self, other)
 
     def __radd__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            otensor = Constant(other)(inputs=[], label=str(other))
-            return add(self, otensor)
+            other = constant(other, label=str(other))
         return add(self, other)
 
     def __mul__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            otensor = Constant(other)(inputs=[], label=str(other))
-            return mul(self, otensor)
+            other = constant(other, label=str(other))
         return mul(self, other)
 
     def __rmul__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            otensor = Constant(other)(inputs=[], label=str(other))
-            return mul(self, otensor)
+            other = constant(other, label=str(other))
         return mul(self, other)
 
     def __truediv__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            otensor = Constant(1/other)(inputs=[], label=f"1/{str(other)}")
-            return mul(self, otensor)
+            other = constant(1 / other, label=str(1 / other))
         return div(self, other)
 
     def __matmul__(self, other: "Tensor") -> "Tensor":
@@ -77,6 +90,7 @@ class Tensor:
     @property
     def T(self) -> "Tensor":
         return transpose(self)
+
 
 class ConstantTensor(Tensor):
     """
@@ -88,9 +102,11 @@ class ConstantTensor(Tensor):
     """
 
     constval: ndarray
-    def __init__(self, value: ndarray, op: 'TensorOp', label: str | None = None):
-        super().__init__(inputs=[], op=op, label=label)
+
+    def __init__(self, value: ndarray, op: "TensorOp", label: str | None = None):
+        super().__init__(inputs=[], op=op, label=label, shape=value.shape)
         self.constval = value
+
 
 class TensorOp(ABC):
     """TensorOp interface represents an operation that can be performed on Tensors."""
@@ -106,9 +122,15 @@ class TensorOp(ABC):
         raise NotImplementedError("TensorOp subclasses must implement __call__")
 
     @abstractmethod
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
+        """
+        Given the input tensors (which contain their shapes), infer the shape of the
+        output tensor that this operation will produce.
+        """
+        raise NotImplementedError("TensorOp subclasses must implement infer_shape()")
+
+    @abstractmethod
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
         """Given the input arrays, compute the output arrays of this operation.
 
         This is used by the evaluator to compute the values of the output tensors in the graph. This
@@ -137,8 +159,10 @@ class TensorOp(ABC):
         """
         raise NotImplementedError("TensorOp subclasses must implement emit_ir()")
 
+
 class Constant(TensorOp):
     value: ndarray
+
     def __init__(self, value: float | int | ndarray):
         if isinstance(value, (float, int)):
             value = np.array(value)
@@ -151,13 +175,15 @@ class Constant(TensorOp):
         label: str | None = None,
     ) -> Tensor:
         assert inputs is None or len(inputs) == 0, "Constant op cannot accept any input tensors"
-        return ConstantTensor(self.value, op=self, label=label)
+        return ConstantTensor(value=self.value, op=self, label=label)
 
     @override
-    def compute(
-        self,
-        inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
+        assert inputs is None or len(inputs) == 0, "Constant op cannot accept any input tensors"
+        return self.value.shape
+
+    @override
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
         assert inputs is None or len(inputs) == 0, "Constant op cannot accept any input tensors"
         return [self.value]
 
@@ -177,6 +203,11 @@ class Input(TensorOp):
     It cannot accept any Tensors, run compute or gradients, and is just a leaf node placeholder.
     """
 
+    shape: tuple[int, ...]
+
+    def __init__(self, shape: tuple[int, ...]):
+        self.shape = shape
+
     @override
     def __call__(
         self,
@@ -184,13 +215,20 @@ class Input(TensorOp):
         label: str | None = None,
     ) -> Tensor:
         assert inputs is None or len(inputs) == 0, "Input op cannot accept any input tensors"
-        return Tensor(inputs=[], op=self, label=label)
+        return Tensor(
+            inputs=[],
+            op=self,
+            shape=self.infer_shape(inputs=inputs),
+            label=label,
+        )
 
     @override
-    def compute(
-        self,
-        inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
+        assert inputs is None or len(inputs) == 0, "Input op cannot accept any input tensors"
+        return self.shape
+
+    @override
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
         raise RuntimeError(
             "Input op does not have a compute implementation.",
             "Did you forget to assign an input node a value before evaluating the graph?",
@@ -213,14 +251,25 @@ class Add(TensorOp):
         inputs: list[Tensor],
         label: str | None = None,
     ) -> Tensor:
-        assert len(inputs) == 2, "Add op requires exactly 2 input tensors"
-        return Tensor(inputs=inputs, op=self, label=label)
+        return Tensor(
+            inputs=inputs,
+            op=self,
+            shape=self.infer_shape(inputs=inputs),
+            label=label,
+        )
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
+        # we force broadcasting to happen as a separate graph node (no implicit broadcast)
+        # so we just return the shape of the first input tensor here
         assert len(inputs) == 2, "Add op requires exactly 2 input tensors"
+        assert inputs[0].shape == inputs[1].shape, "Add op requires tensors to have the same shape"
+        return inputs[0].shape
+
+    @override
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
+        assert len(inputs) == 2, "Add op requires exactly 2 input tensors"
+        assert inputs[0].shape == inputs[1].shape, "Add op requires tensors to have the same shape"
         return [inputs[0] + inputs[1]]
 
     @override
@@ -240,14 +289,23 @@ class Mul(TensorOp):
         inputs: list[Tensor],
         label: str | None = None,
     ) -> Tensor:
-        assert len(inputs) == 2, "Mul op requires exactly 2 input tensors"
-        return Tensor(inputs=inputs, op=self, label=label)
+        return Tensor(
+            inputs=inputs,
+            op=self,
+            shape=self.infer_shape(inputs=inputs),
+            label=label,
+        )
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
         assert len(inputs) == 2, "Mul op requires exactly 2 input tensors"
+        assert inputs[0].shape == inputs[1].shape, "Mul op requires tensors to have the same shape"
+        return inputs[0].shape
+
+    @override
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
+        assert len(inputs) == 2, "Mul op requires exactly 2 input tensors"
+        assert inputs[0].shape == inputs[1].shape, "Mul op requires tensors to have the same shape"
         return [inputs[0] * inputs[1]]
 
     @override
@@ -259,6 +317,7 @@ class Mul(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
+
 class Div(TensorOp):
     @override
     def __call__(
@@ -266,14 +325,23 @@ class Div(TensorOp):
         inputs: list[Tensor],
         label: str | None = None,
     ) -> Tensor:
-        assert len(inputs) == 2, "Div op requires exactly 2 input tensors"
-        return Tensor(inputs=inputs, op=self, label=label)
+        return Tensor(
+            inputs=inputs,
+            op=self,
+            shape=self.infer_shape(inputs=inputs),
+            label=label,
+        )
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
         assert len(inputs) == 2, "Div op requires exactly 2 input tensors"
+        assert inputs[0].shape == inputs[1].shape, "Div op requires tensors to have the same shape"
+        return inputs[0].shape
+
+    @override
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
+        assert len(inputs) == 2, "Div op requires exactly 2 input tensors"
+        assert inputs[0].shape == inputs[1].shape, "Div op requires tensors to have the same shape"
         return [inputs[0] / inputs[1]]
 
     @override
@@ -289,6 +357,7 @@ class Div(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
+
 class Transpose(TensorOp):
     @override
     def __call__(
@@ -296,23 +365,33 @@ class Transpose(TensorOp):
         inputs: list[Tensor],
         label: str | None = None,
     ) -> Tensor:
-        assert len(inputs) == 1, "Transpose op requires exactly 1 input tensor"
-        return Tensor(inputs=inputs, op=self, label=label)
+        return Tensor(
+            inputs=inputs,
+            op=self,
+            shape=self.infer_shape(inputs=inputs),
+            label=label,
+        )
 
     @override
-    def compute(
-        self, inputs: list[ndarray]
-    ) -> list[ndarray]:
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
         assert len(inputs) == 1, "Transpose op requires exactly 1 input tensor"
+        assert len(inputs[0].shape) == 2, "Transpose op requires a 2D input tensor"
+        return (inputs[0].shape[1], inputs[0].shape[0])
+
+    @override
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
+        assert len(inputs) == 1, "Transpose op requires exactly 1 input tensor"
+        assert inputs[0].ndim == 2, "Transpose op requires a 2D input tensor"
         return [inputs[0].T]
 
     @override
     def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
-       return [incoming_grad.T]
+        return [incoming_grad.T]
 
     @override
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
+
 
 class Matmul(TensorOp):
     @override
@@ -321,15 +400,26 @@ class Matmul(TensorOp):
         inputs: list[Tensor],
         label: str | None = None,
     ) -> Tensor:
-        assert len(inputs) == 2, "Matmul op requires exactly 2 input tensors"
-        return Tensor(inputs=inputs, op=self, label=label)
+        return Tensor(
+            inputs=inputs,
+            op=self,
+            shape=self.infer_shape(inputs=inputs),
+            label=label,
+        )
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
-        assert(len(inputs) == 2), "Matmul op requires exactly 2 input tensors"
-        assert(inputs[0].ndim == 2 and inputs[1].ndim == 2), "Matmul op requires 2D input tensors"
+    def infer_shape(self, inputs: list[Tensor]) -> tuple[int, ...]:
+        assert len(inputs) == 2, "Matmul op requires exactly 2 input tensors"
+        assert len(inputs[0].shape) == 2 and len(inputs[1].shape) == 2, (
+            "Matmul op requires 2D input tensors"
+        )
+        assert inputs[0].shape[1] == inputs[1].shape[0], "Matmul input shapes are incompatible"
+        return (inputs[0].shape[0], inputs[1].shape[1])
+
+    @override
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
+        assert len(inputs) == 2, "Matmul op requires exactly 2 input tensors"
+        assert inputs[0].ndim == 2 and inputs[1].ndim == 2, "Matmul op requires 2D input tensors"
         return [inputs[0] @ inputs[1]]
 
     @override
@@ -353,9 +443,7 @@ class ZerosLike(TensorOp):
         pass
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
         pass
 
     @override
@@ -365,6 +453,7 @@ class ZerosLike(TensorOp):
     @override
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
+
 
 class OnesLike(TensorOp):
     @override
@@ -376,9 +465,7 @@ class OnesLike(TensorOp):
         pass
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
         pass
 
     @override
@@ -388,6 +475,7 @@ class OnesLike(TensorOp):
     @override
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
+
 
 class Reshape(TensorOp):
     @override
@@ -399,9 +487,7 @@ class Reshape(TensorOp):
         pass
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
         pass
 
     @override
@@ -411,6 +497,7 @@ class Reshape(TensorOp):
     @override
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
+
 
 class BroadcastTo(TensorOp):
     @override
@@ -422,9 +509,7 @@ class BroadcastTo(TensorOp):
         pass
 
     @override
-    def compute(
-        self, inputs: list[np.ndarray]
-    ) -> list[np.ndarray]:
+    def compute(self, inputs: list[ndarray]) -> list[ndarray]:
         pass
 
     @override
@@ -435,33 +520,50 @@ class BroadcastTo(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
-def input(label: str | None = None) -> Tensor:
+
+def constant(value: float | int | ndarray, label: str | None = None) -> Tensor:
+    """Create a constant Tensor with the given value and an optional label.
+    This is used to denote constant values in the computational graph that are not supplied at
+    evaluation time, but rather determined at graph construction time.
+    """
+    return Constant(value)(inputs=[], label=label)
+
+
+def input(shape: tuple[int, ...], label: str | None = None) -> Tensor:
     """Create an input Tensor with an optional label.
     This is used to denote the inputs to the computational graph.
     All input nodes must be assigned a
     value at evaluation time.
     """
-    return Input()(inputs=[], label=label)
+    return Input(shape=shape)(inputs=[], label=label)
+
+
+# TODO: add broadcasting for ops that need it in the wrapping helper funcs
+
 
 def add(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Add two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
     return Add()(inputs=[t1, t2], label=label)
 
+
 def mul(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Multiply two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
     return Mul()(inputs=[t1, t2], label=label)
+
 
 def div(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Divide two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
     return Div()(inputs=[t1, t2], label=label)
 
+
 def mm(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Matrix multiply two tensors, returning a new tensor that represents the output of this
     operation."""
     return Matmul()(inputs=[t1, t2], label=label)
+
 
 def transpose(t: Tensor, label: str | None = None) -> Tensor:
     """Transpose a tensor, returning a new tensor that represents the output of this operation."""

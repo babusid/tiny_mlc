@@ -1,13 +1,14 @@
 from typing_extensions import override
 from abc import ABC, abstractmethod
 import numpy as np
-
+from numpy import ndarray
 
 class Tensor:
     """A Tensor is a node in a computational graph, representing a multi-dimensional array.
-
     Tensors are the inputs to tensor operations, which output new tensors. A sequence of Tensor
     Operations chained together produces a computational graph, which we can compile and optimize.
+    Tensors do NOT actually hold data themseleves, but rather represent the flow of data through
+    the graph. The actual data is held in buffers that are supplied at evaluation time.
     """
 
     # input tensors that feed this one (parent nodes in the graph)
@@ -19,9 +20,6 @@ class Tensor:
     # Tensor label
     label: str
 
-    # constant value field for tensors associated with constant ops
-    constval: float | None
-
     def __init__(
         self,
         inputs: list["Tensor"],
@@ -31,7 +29,6 @@ class Tensor:
     ):
         self.inputs = inputs
         self.op = op
-        self.constval = constval
         if label is None:
             self.label = self.op.__class__.__name__
         else:
@@ -47,29 +44,47 @@ class Tensor:
 
     def __add__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            return add_const(self, other)
+            otensor = Constant(other)(inputs=[], label=str(other))
+            return add(self, otensor)
         return add(self, other)
 
     def __radd__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            return add_const(self, other)
+            otensor = Constant(other)(inputs=[], label=str(other))
+            return add(self, otensor)
         return add(self, other)
 
     def __mul__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            return mul_const(self, other)
+            otensor = Constant(other)(inputs=[], label=str(other))
+            return mul(self, otensor)
         return mul(self, other)
 
     def __rmul__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            return mul_const(self, other)
+            otensor = Constant(other)(inputs=[], label=str(other))
+            return mul(self, otensor)
         return mul(self, other)
 
     def __truediv__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
+            otensor = Constant(other)(inputs=[], label=str(other))
             return mul_const(self, 1 / other)
         return div(self, other)
 
+class ConstantTensor(Tensor):
+    """
+    Constant is a special type of Tensor that holds a buffer that is managed outside of the graph.
+    It is operationally equivalent to an Input node, except that its value is determined at creation
+    time, rather than supplied at evaluation time.
+    It is a leaf node in the graph and does not have any input tensors.
+    The value of a Constant tensor is stored in the `constval` field.
+    """
+
+    constval: ndarray
+    def __init__(self, value: ndarray, op: 'TensorOp', label: str | None = None):
+        super().__init__(inputs=[], op=op, label=label)
+        self.constval = value
 
 class TensorOp(ABC):
     """TensorOp interface represents an operation that can be performed on Tensors."""
@@ -78,7 +93,6 @@ class TensorOp(ABC):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
         label: str | None = None,
     ) -> Tensor:
         """When a TensorOp is called, it should create a new Tensor that represents the output of
@@ -87,7 +101,7 @@ class TensorOp(ABC):
 
     @abstractmethod
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         """Given the input arrays, compute the output arrays of this operation.
 
@@ -117,6 +131,41 @@ class TensorOp(ABC):
         """
         raise NotImplementedError("TensorOp subclasses must implement emit_ir()")
 
+class Constant(TensorOp):
+    value: ndarray
+    def __init__(self, value: float | int | ndarray):
+        if isinstance(value, (float, int)):
+            value = np.array(value)
+        self.value = value
+
+    @override
+    def __call__(
+        self,
+        inputs: list[Tensor],
+        label: str | None = None,
+    ) -> Tensor:
+        assert inputs is None or len(inputs) == 0, "Constant op cannot accept any input tensors"
+        return ConstantTensor(self.value, op=self, label=label)
+
+    @override
+    def compute(
+        self,
+        inputs: list[np.ndarray]
+    ) -> list[np.ndarray]:
+        raise RuntimeError(
+            "Input op does not have a compute implementation.",
+            "Did you forget to assign an input node a value before evaluating the graph?",
+        )
+
+    @override
+    def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
+        raise RuntimeError("Input Ops don't have gradients")
+
+    @override
+    def emit_ir(self, inputs: list[str]) -> str:
+        # TODO: Figure out what to do here not sure what emitting ir for a leaf node looks like
+        return ""
+
 
 class Input(TensorOp):
     """Input denotes an input to the computational graph.
@@ -128,20 +177,15 @@ class Input(TensorOp):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float] | None = None,
         label: str | None = None,
     ) -> Tensor:
         assert inputs is None or len(inputs) == 0, "Input op cannot accept any input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Input op cannot accept any constant inputs"
-        )
         return Tensor(inputs=[], op=self, label=label)
 
     @override
     def compute(
         self,
-        inputs: list[np.ndarray],
-        const_inputs: list[float] | None = None,
+        inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         raise RuntimeError(
             "Input op does not have a compute implementation.",
@@ -163,24 +207,16 @@ class Add(TensorOp):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float] | None = None,
         label: str | None = None,
     ) -> Tensor:
         assert len(inputs) == 2, "Add op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Add op does not accept constant inputs"
-        )
         return Tensor(inputs=inputs, op=self, label=label)
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         assert len(inputs) == 2, "Add op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Add op does not accept constant inputs"
-        )
-
         return [inputs[0] + inputs[1]]
 
     @override
@@ -193,61 +229,21 @@ class Add(TensorOp):
         return ""
 
 
-class AddConst(TensorOp):
-    @override
-    def __call__(
-        self,
-        inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
-        label: str | None = None,
-    ) -> Tensor:
-        assert len(inputs) == 1, "AddConst op requires exactly 1 input tensors"
-        assert const_inputs and len(const_inputs) == 1, (
-            "AddConst op requires exactly 1 constant input"
-        )
-        return Tensor(inputs=inputs, op=self, label=label, constval=const_inputs[0])
-
-    @override
-    def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
-    ) -> list[np.ndarray]:
-        assert len(inputs) == 1, "AddConst op requires exactly 1 input tensors"
-        assert const_inputs and len(const_inputs) == 1, (
-            "AddConst op requires exactly 1 constant input"
-        )
-        return [inputs[0] + const_inputs[0]]
-
-    @override
-    def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
-        return [incoming_grad]
-
-    @override
-    def emit_ir(self, inputs: list[str]) -> str:
-        return ""
-
-
 class Mul(TensorOp):
     @override
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float] | None = None,
         label: str | None = None,
     ) -> Tensor:
         assert len(inputs) == 2, "Mul op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Mul op does not accept constant inputs"
-        )
         return Tensor(inputs=inputs, op=self, label=label)
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         assert len(inputs) == 2, "Mul op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Mul op does not accept constant inputs"
-        )
         return [inputs[0] * inputs[1]]
 
     @override
@@ -259,69 +255,21 @@ class Mul(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
-
-class MulConst(TensorOp):
-    @override
-    def __call__(
-        self,
-        inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
-        label: str | None = None,
-    ) -> Tensor:
-        assert len(inputs) == 1, "MulConst op requires exactly 1 input tensors"
-        assert const_inputs and len(const_inputs) == 1, (
-            "MulConst op requires exactly 1 constant input",
-        )
-
-        return Tensor(inputs=inputs, op=self, label=label, constval=const_inputs[0])
-
-    @override
-    def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float] | None = None
-    ) -> list[np.ndarray]:
-        assert len(inputs) == 1, "Mul op requires exactly 1 input array"
-        assert const_inputs and len(const_inputs) == 1, (
-            "MulConst op requires exactly 1 constant input"
-        )
-
-        return [inputs[0] * const_inputs[0]]
-
-    @override
-    def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
-        assert tensor.constval is not None, "MulConst op requires a constant value"
-
-        # dL/dx = dL/dy * dy/dx = incoming_grad * y
-        return [tensor.constval * incoming_grad]
-
-    @override
-    def emit_ir(self, inputs: list[str]) -> str:
-        return ""
-
-
 class Div(TensorOp):
     @override
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
         label: str | None = None,
     ) -> Tensor:
         assert len(inputs) == 2, "Div op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Div op does not accept constant inputs"
-        )
-
         return Tensor(inputs=inputs, op=self, label=label)
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         assert len(inputs) == 2, "Div op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Div op does not accept constant inputs",
-        )
-
         return [inputs[0] / inputs[1]]
 
     @override
@@ -343,24 +291,16 @@ class Matmul(TensorOp):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
         label: str | None = None,
     ) -> Tensor:
         assert len(inputs) == 2, "Matmul op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Matmul op does not accept constant inputs"
-        )
-
         return Tensor(inputs=inputs, op=self, label=label)
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         assert(len(inputs) == 2), "Matmul op requires exactly 2 input tensors"
-        assert const_inputs is None or len(const_inputs) == 0, (
-            "Matmul op does not accept constant inputs"
-        )
         return [inputs[0] @ inputs[1]]
 
 
@@ -380,14 +320,13 @@ class ZerosLike(TensorOp):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
         label: str | None = None,
     ) -> Tensor:
         pass
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         pass
 
@@ -405,14 +344,13 @@ class OnesLike(TensorOp):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
         label: str | None = None,
     ) -> Tensor:
         pass
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         pass
 
@@ -430,14 +368,13 @@ class Reshape(TensorOp):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
         label: str | None = None,
     ) -> Tensor:
         pass
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         pass
 
@@ -455,14 +392,13 @@ class BroadcastTo(TensorOp):
     def __call__(
         self,
         inputs: list[Tensor],
-        const_inputs: list[float | int] | None = None,
         label: str | None = None,
     ) -> Tensor:
         pass
 
     @override
     def compute(
-        self, inputs: list[np.ndarray], const_inputs: list[float | int] | None = None
+        self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         pass
 
@@ -478,9 +414,7 @@ class BroadcastTo(TensorOp):
 # Singleton factory instances of tensor operations.
 _input = Input()
 _add = Add()
-_addc = AddConst()
 _mul = Mul()
-_mulc = MulConst()
 _div = Div()
 _mm = Matmul()
 _zlike = ZerosLike()

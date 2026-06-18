@@ -68,9 +68,16 @@ class Tensor:
 
     def __truediv__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            otensor = Constant(other)(inputs=[], label=str(other))
-            return mul_const(self, 1 / other)
+            otensor = Constant(1/other)(inputs=[], label=str(other))
+            return mul(self, otensor)
         return div(self, other)
+
+    def __matmul__(self, other: "Tensor") -> "Tensor":
+        return mm(self, other)
+
+    @property
+    def T(self) -> "Tensor":
+        return transpose(self)
 
 class ConstantTensor(Tensor):
     """
@@ -285,6 +292,30 @@ class Div(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
+class Transpose(TensorOp):
+    @override
+    def __call__(
+        self,
+        inputs: list[Tensor],
+        label: str | None = None,
+    ) -> Tensor:
+        assert len(inputs) == 1, "Transpose op requires exactly 1 input tensor"
+        return Tensor(inputs=inputs, op=self, label=label)
+
+    @override
+    def compute(
+        self, inputs: list[ndarray]
+    ) -> list[ndarray]:
+        assert len(inputs) == 1, "Transpose op requires exactly 1 input tensor"
+        return [inputs[0].T]
+
+    @override
+    def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
+       return [incoming_grad.T]
+
+    @override
+    def emit_ir(self, inputs: list[str]) -> str:
+        return ""
 
 class Matmul(TensorOp):
     @override
@@ -302,7 +333,6 @@ class Matmul(TensorOp):
     ) -> list[np.ndarray]:
         assert(len(inputs) == 2), "Matmul op requires exactly 2 input tensors"
         return [inputs[0] @ inputs[1]]
-
 
     @override
     def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
@@ -338,7 +368,6 @@ class ZerosLike(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
-
 class OnesLike(TensorOp):
     @override
     def __call__(
@@ -361,7 +390,6 @@ class OnesLike(TensorOp):
     @override
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
-
 
 class Reshape(TensorOp):
     @override
@@ -386,7 +414,6 @@ class Reshape(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
-
 class BroadcastTo(TensorOp):
     @override
     def __call__(
@@ -410,12 +437,12 @@ class BroadcastTo(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
-
 # Singleton factory instances of tensor operations.
 _input = Input()
 _add = Add()
 _mul = Mul()
 _div = Div()
+_transpose = Transpose()
 _mm = Matmul()
 _zlike = ZerosLike()
 _olike = OnesLike()
@@ -436,26 +463,26 @@ def input(label: str | None = None) -> Tensor:
     """
     return _input(inputs=[], label=label)
 
-
 def add(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Add two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
     return _add(inputs=[t1, t2], label=label)
-
 
 def mul(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Multiply two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
     return _mul(inputs=[t1, t2], label=label)
 
-
-def mul_const(t: Tensor, c: float | int, label: str | None = None) -> Tensor:
-    """Multiply a tensor by a constant, returning a new tensor that represents the output of this
-    operation."""
-    return _mulc(inputs=[t], const_inputs=[c], label=label)
-
-
 def div(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Divide two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
     return _div(inputs=[t1, t2], label=label)
+
+def mm(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
+    """Matrix multiply two tensors, returning a new tensor that represents the output of this
+    operation."""
+    return _mm(inputs=[t1, t2], label=label)
+
+def transpose(t: Tensor, label: str | None = None) -> Tensor:
+    """Transpose a tensor, returning a new tensor that represents the output of this operation."""
+    return _transpose(inputs=[t], label=label)

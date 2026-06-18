@@ -25,7 +25,6 @@ class Tensor:
         inputs: list["Tensor"],
         op: "TensorOp",
         label: str | None = None,
-        constval: float | None = None,
     ):
         self.inputs = inputs
         self.op = op
@@ -68,7 +67,7 @@ class Tensor:
 
     def __truediv__(self, other: "Tensor|float|int") -> "Tensor":
         if isinstance(other, (int, float)):
-            otensor = Constant(1/other)(inputs=[], label=str(other))
+            otensor = Constant(1/other)(inputs=[], label=f"1/{str(other)}")
             return mul(self, otensor)
         return div(self, other)
 
@@ -159,14 +158,12 @@ class Constant(TensorOp):
         self,
         inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
-        raise RuntimeError(
-            "Input op does not have a compute implementation.",
-            "Did you forget to assign an input node a value before evaluating the graph?",
-        )
+        assert inputs is None or len(inputs) == 0, "Constant op cannot accept any input tensors"
+        return [self.value]
 
     @override
     def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
-        raise RuntimeError("Input Ops don't have gradients")
+        return []  # Constant nodes do not have gradients
 
     @override
     def emit_ir(self, inputs: list[str]) -> str:
@@ -201,7 +198,7 @@ class Input(TensorOp):
 
     @override
     def gradients(self, tensor: Tensor, incoming_grad: Tensor) -> list[Tensor]:
-        raise RuntimeError("Input Ops don't have gradients")
+        return []  # Input nodes do not have gradients
 
     @override
     def emit_ir(self, inputs: list[str]) -> str:
@@ -332,6 +329,7 @@ class Matmul(TensorOp):
         self, inputs: list[np.ndarray]
     ) -> list[np.ndarray]:
         assert(len(inputs) == 2), "Matmul op requires exactly 2 input tensors"
+        assert(inputs[0].ndim == 2 and inputs[1].ndim == 2), "Matmul op requires 2D input tensors"
         return [inputs[0] @ inputs[1]]
 
     @override
@@ -437,52 +435,34 @@ class BroadcastTo(TensorOp):
     def emit_ir(self, inputs: list[str]) -> str:
         return ""
 
-# Singleton factory instances of tensor operations.
-_input = Input()
-_add = Add()
-_mul = Mul()
-_div = Div()
-_transpose = Transpose()
-_mm = Matmul()
-_zlike = ZerosLike()
-_olike = OnesLike()
-_reshape = Reshape()
-_brodacast = BroadcastTo()
-
-# Functional wrappers on singletons
-# Note: singleton pattern allows us to have a generic interface for all TensorOps,
-# while adding op-specific usage gates at the wrapper level. For example, we can enforce
-# that the input op doesn't accept any input tensors.
-
-
 def input(label: str | None = None) -> Tensor:
     """Create an input Tensor with an optional label.
     This is used to denote the inputs to the computational graph.
     All input nodes must be assigned a
     value at evaluation time.
     """
-    return _input(inputs=[], label=label)
+    return Input()(inputs=[], label=label)
 
 def add(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Add two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
-    return _add(inputs=[t1, t2], label=label)
+    return Add()(inputs=[t1, t2], label=label)
 
 def mul(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Multiply two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
-    return _mul(inputs=[t1, t2], label=label)
+    return Mul()(inputs=[t1, t2], label=label)
 
 def div(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Divide two tensors elementwise, returning a new tensor that represents the output of this
     operation."""
-    return _div(inputs=[t1, t2], label=label)
+    return Div()(inputs=[t1, t2], label=label)
 
 def mm(t1: Tensor, t2: Tensor, label: str | None = None) -> Tensor:
     """Matrix multiply two tensors, returning a new tensor that represents the output of this
     operation."""
-    return _mm(inputs=[t1, t2], label=label)
+    return Matmul()(inputs=[t1, t2], label=label)
 
 def transpose(t: Tensor, label: str | None = None) -> Tensor:
     """Transpose a tensor, returning a new tensor that represents the output of this operation."""
-    return _transpose(inputs=[t], label=label)
+    return Transpose()(inputs=[t], label=label)

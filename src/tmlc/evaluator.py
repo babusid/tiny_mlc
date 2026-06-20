@@ -65,25 +65,25 @@ def gradients(output_node: Tensor, target_nodes: list[Tensor]):
     visited = set()
 
     def generate_target_set(tensor: Tensor) -> bool:
-        # if we've already seen it, or we're already a target
-        # just return whether its a target or not
-        if tensor in visited or tensor in target_set:
+        # if we've already explored this node, just return whether it ended up a target
+        if tensor in visited:
             return tensor in target_set
-        # add it to the seen set
         visited.add(tensor)
 
-        # inputs and constants are not differentiable.
+        # inputs and constants are leaves: they're only targets if explicitly requested
         if isinstance(tensor.op, Input) or isinstance(tensor.op, Constant):
-            return False
+            return tensor in target_set
 
+        # always recurse, even if `tensor` is already an explicit target, since ancestors
+        # further up the graph still need to be connected through to it
+        reached_target = tensor in target_set
         for input in tensor.inputs:
-            # recurse on input, if input returns true, then this is also on the path
-            # between output and target node
             if generate_target_set(input):
-                target_set.add(tensor)
-                return True
+                reached_target = True
 
-        return False
+        if reached_target:
+            target_set.add(tensor)
+        return reached_target
 
     _ = generate_target_set(output_node)
 

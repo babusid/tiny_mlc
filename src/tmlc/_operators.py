@@ -11,31 +11,30 @@ from tmlc.ops.ops_basic import constant
 from tmlc.ops.ops_shape import transpose
 
 
-def _coerce(other: Tensor | float | int, reciprocal: bool = False) -> Tensor:
+def ensure_tensor(other: Tensor | float | int) -> Tensor:
     if isinstance(other, (int, float)):
-        value = 1 / other if reciprocal else other
-        return constant(value, label=str(value))
+        return constant(other, label=str(other))
     return other
 
 
 def _add(self: Tensor, other: Tensor | float | int) -> Tensor:
-    return add(self, _coerce(other))
+    return add(self, ensure_tensor(other))
 
 
 def _mul(self: Tensor, other: Tensor | float | int) -> Tensor:
-    return mul(self, _coerce(other))
+    return mul(self, ensure_tensor(other))
 
 
 def _truediv(self: Tensor, other: Tensor | float | int) -> Tensor:
-    return div(self, _coerce(other, reciprocal=True))
+    return div(self, ensure_tensor(other))
 
 
 def _sub(self: Tensor, other: Tensor | float | int) -> Tensor:
-    return add(self, negate(_coerce(other)))
+    return add(self, negate(ensure_tensor(other)))
 
 
 def _rsub(self: Tensor, other: Tensor | float | int) -> Tensor:
-    return add(_coerce(other), negate(self))
+    return add(ensure_tensor(other), negate(self))
 
 
 def _neg(self: Tensor) -> Tensor:
@@ -43,7 +42,7 @@ def _neg(self: Tensor) -> Tensor:
 
 
 def _pow(self: Tensor, other: Tensor | float | int) -> Tensor:
-    return power(self, _coerce(other))
+    return power(self, ensure_tensor(other))
 
 
 def _matmul(self: Tensor, other: Tensor) -> Tensor:

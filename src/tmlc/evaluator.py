@@ -1,14 +1,14 @@
 """Evaluator for TMLC computational graphs."""
 
-import numpy as np
+from collections import defaultdict
 import warnings
 from tmlc.ndarray import ndarray
 from tmlc.tensor import Tensor
+from tmlc.ops.ops_basic import Input, Constant
+from tmlc.ops.ops_shape import ones_like
 
 
-def run(
-    inputs: dict[Tensor, ndarray], outputs: list[Tensor]
-) -> list[list[ndarray] | ndarray]:
+def run(inputs: dict[Tensor, ndarray], outputs: list[Tensor]) -> list[list[ndarray] | ndarray]:
     # eager mode evaluation
     # 1. reverse topo sort graph from outputs to inputs and
     #    build a traversal / target set of nodes that we have to compute
@@ -38,12 +38,84 @@ def run(
 
     return output
 
-def gradients():
+
+def gradients(output_node: Tensor, target_nodes: list[Tensor]):
     # extend graph with gradients for desired node grads
-    return
+    # topo sort, then reverse so output is at the front
+    # then construct a oneslike node for the output node, then call
+    # gradient repeatedly. After each node gradient, store that computed gradient
+    # to the corresponding input
+    # in a dictionary mapping nodes :: incoming_gradients
+    # store the total gradient for this node (sum up all gradients) if needed
+    # finally after finishing, return a list of gradients corresponding to the nodes we wanted
+    # OPTIM: prune the set of nodes we compute gradients for by isolating
+    # to only the ones on the path to the target nodes
+
+    visited: set[Tensor] = set()
+    rev_topo_sort: list[Tensor] = []
+    _dfs_helper_topo_sort(output_node, visited, rev_topo_sort)
+    rev_topo_sort.reverse()
+
+    output_grad = ones_like(output_node, "output_grad")
+
+    # track which nodes in the graph we actually have to
+    # compute gradients for. This includes the targets,
+    # the output gradient, and everything on the path between them
+    target_set = set(target_nodes + [output_node])
+    visited = set()
+
+    def generate_target_set(tensor: Tensor) -> bool:
+        # if we've already seen it, or we're already a target
+        # just return whether its a target or not
+        if tensor in visited or tensor in target_set:
+            return tensor in target_set
+        # add it to the seen set
+        visited.add(tensor)
+
+        # inputs and constants are not differentiable.
+        if isinstance(tensor.op, Input) or isinstance(tensor.op, Constant):
+            return False
+
+        for input in tensor.inputs:
+            # recurse on input, if input returns true, then this is also on the path
+            # between output and target node
+            if generate_target_set(input):
+                target_set.add(tensor)
+                return True
+
+        return False
+
+    _ = generate_target_set(output_node)
+
+    # now we have all nodes we have to compute gradients for in target_set
+    # for each node, we have to track what is coming in backwards
+    node_grad_incoming: dict[Tensor, list[Tensor]] = defaultdict(list)
+    # output node just gets the all one output gradient
+    node_grad_incoming[output_node] = [output_grad]
+    # map tensor to the aggregate of its input gradients
+    node_grad: dict[Tensor, Tensor] = {}
+    for node in rev_topo_sort:
+        if node not in target_set:
+            continue
+        # get all incoming partial gradients, and aggregate them
+        incoming_grad = node_grad_incoming[node]
+        sum_grad = incoming_grad[0]
+        for grad in incoming_grad[1:]:
+            sum_grad += grad
+        node_grad[node] = sum_grad
+        # pass in aggregate gradient and calculate the gradients
+        # wrt this nodes inputs
+        input_grads = node.op.gradients(node, sum_grad)
+        for input, input_grad in zip(node.inputs, input_grads):
+            # pass in the appropriate gradients
+            node_grad_incoming[input].append(input_grad)
+
+    return [node_grad[target] for target in target_nodes]
+
 
 def compile():
     return
+
 
 def run_compiled():
     return

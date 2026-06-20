@@ -1,8 +1,15 @@
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 from numpy import ndarray
 from typing_extensions import override
 
 
+# Tensor's operator dunders (__add__, __mul__, .T, etc.) are intentionally NOT implemented here.
+# Ops modules need Tensor/TensorOp as base classes, and operators need ops, which would make
+# tensor.py and the ops modules import each other. To keep that a one-directional dependency
+# (ops -> tensor only), the dunders are attached onto this class after the fact by
+# tmlc/_operators.py, which is imported once from tmlc/__init__.py. The signatures below
+# (TYPE_CHECKING-only) exist purely so static analysis and editors know the dunders exist.
 class Tensor:
     """A Tensor is a node in a computational graph, representing a multi-dimensional array.
     Tensors are the inputs to tensor operations, which output new tensors. A sequence of Tensor
@@ -48,85 +55,20 @@ class Tensor:
     def __repr__(self):
         return self.__str__()
 
-    def __add__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import add
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(other, label=str(other))
-        return add(self, other)
-
-    def __radd__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import add
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(other, label=str(other))
-        return add(self, other)
-
-    def __mul__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import mul
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(other, label=str(other))
-        return mul(self, other)
-
-    def __rmul__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import mul
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(other, label=str(other))
-        return mul(self, other)
-
-    def __truediv__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import div
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(1 / other, label=str(1 / other))
-        return div(self, other)
-
-    def __sub__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import add, negate
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(other, label=str(other))
-        return add(self, negate(other))
-
-    def __rsub__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import add, negate
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(other, label=str(other))
-        return add(other, negate(self))
-
-    def __neg__(self) -> "Tensor":
-        from tmlc.ops.ops_arithmetic import negate
-
-        return negate(self)
-
-    def __pow__(self, other: "Tensor|float|int") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import power
-        from tmlc.ops.ops_basic import constant
-
-        if isinstance(other, (int, float)):
-            other = constant(other, label=str(other))
-        return power(self, other)
-
-    def __matmul__(self, other: "Tensor") -> "Tensor":
-        from tmlc.ops.ops_arithmetic import mm
-
-        return mm(self, other)
-
-    @property
-    def T(self) -> "Tensor":
-        from tmlc.ops.ops_shape import transpose
-
-        return transpose(self)
+    if TYPE_CHECKING:
+        # Real implementations attached by tmlc/_operators.py — see comment above the class.
+        def __add__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __radd__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __mul__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __rmul__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __truediv__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __sub__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __rsub__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __neg__(self) -> "Tensor": ...
+        def __pow__(self, other: "Tensor | float | int") -> "Tensor": ...
+        def __matmul__(self, other: "Tensor") -> "Tensor": ...
+        @property
+        def T(self) -> "Tensor": ...
 
 
 class ConstantTensor(Tensor):

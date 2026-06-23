@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import copy
 from collections import defaultdict
+from collections.abc import Sequence
 from functools import reduce
 from tmlc.tensor.tensor import Tensor
-from tmlc.tensor.ops.ops_basic import Constant, Input
 from tmlc.tensor.ops.ops_shape import ones_like
 from tmlc.util.topo_sort import dfs_helper_topo_sort
 from tmlc.ndarray import ndarray
@@ -30,28 +29,42 @@ class Graph:
     Must be built in order to actually run the computation graph, as well as to apply
     graph optimizations for increased performance. Building a Graph is the first part
     of the compilation process.
-    """
-    inputs: list[Tensor]
-    outputs: list[Tensor]
-    topo_sort: list[Tensor]
 
-    def __init__(self, inputs: list[Tensor], outputs: list[Tensor]) -> None:
-        self.inputs = inputs
-        self.outputs = outputs
-        self.topo_sort = self._build_topo_sort()
+    Immutable by design: `inputs`/`outputs`/`topo_sort` are read-only tuples. A GraphTransform
+    must never mutate the graph it's given — it must build and return a new Graph instead.
+    """
+    _inputs: tuple[Tensor, ...]
+    _outputs: tuple[Tensor, ...]
+    _topo_sort: tuple[Tensor, ...]
+
+    def __init__(self, inputs: Sequence[Tensor], outputs: Sequence[Tensor]) -> None:
+        self._inputs = tuple(inputs)
+        self._outputs = tuple(outputs)
+        self._topo_sort = tuple(self._build_topo_sort())
+
+    @property
+    def inputs(self) -> tuple[Tensor, ...]:
+        return self._inputs
+
+    @property
+    def outputs(self) -> tuple[Tensor, ...]:
+        return self._outputs
+
+    @property
+    def topo_sort(self) -> tuple[Tensor, ...]:
+        return self._topo_sort
 
     def _build_topo_sort(self) -> list[Tensor]:
         """Return a topological sort of the graph's nodes."""
         visited: set[Tensor] = set()
         _topo: list[Tensor] = []
-        for node in self.outputs:
+        for node in self._outputs:
             dfs_helper_topo_sort(node, visited, _topo)
         return _topo
 
     def apply_transforms(self, transform_fns: list[GraphTransform]) -> Graph:
         """Apply a transform pipeline to the graph"""
-        init: Graph = copy.deepcopy(self)
-        return reduce(lambda graph, fn: fn(graph), transform_fns, init)
+        return reduce(lambda graph, fn: fn(graph), transform_fns, self)
 
     def run(self, inputs: dict[Tensor, ndarray]) -> list[list[ndarray]]:
         outputs = self.outputs
@@ -79,41 +92,10 @@ class Graph:
         return
 
 def differentiate(graph: Graph, output_node: Tensor, target_nodes: list[Tensor]) -> Graph:
-    visited: set[Tensor] = set()
     rev_topo_sort: list[Tensor] = []
     rev_topo_sort = [t for t in graph.topo_sort]
     rev_topo_sort.reverse()
-
     output_grad = ones_like(output_node, "output_grad")
-
-    # track which nodes in the graph we actually have to
-    # compute gradients for. This includes the targets,
-    # the output gradient, and everything on the path between them
-    target_set = set(target_nodes + [output_node])
-    visited = set()
-
-    def generate_target_set(tensor: Tensor) -> bool:
-        # if we've already explored this node, just return whether it ended up a target
-        if tensor in visited:
-            return tensor in target_set
-        visited.add(tensor)
-
-        # inputs and constants are leaves: they're only targets if explicitly requested
-        if isinstance(tensor.op, Input) or isinstance(tensor.op, Constant):
-            return tensor in target_set
-
-        # always recurse, even if `tensor` is already an explicit target, since ancestors
-        # further up the graph still need to be connected through to it
-        reached_target = tensor in target_set
-        for input in tensor.inputs:
-            if generate_target_set(input):
-                reached_target = True
-
-        if reached_target:
-            target_set.add(tensor)
-        return reached_target
-
-    _ = generate_target_set(output_node)
 
     # now we have all nodes we have to compute gradients for in target_set
     # for each node, we have to track what is coming in backwards
@@ -123,13 +105,9 @@ def differentiate(graph: Graph, output_node: Tensor, target_nodes: list[Tensor])
     # map tensor to the aggregate of its input gradients
     node_grad: dict[Tensor, Tensor] = {}
     for node in rev_topo_sort:
-        if node not in target_set:
-            continue
         # get all incoming partial gradients, and aggregate them
         incoming_grad = node_grad_incoming[node]
-        sum_grad = incoming_grad[0]
-        for grad in incoming_grad[1:]:
-            sum_grad += grad
+        sum_grad: Tensor = reduce(lambda a, b: a + b, incoming_grad[1:], incoming_grad[0])
         node_grad[node] = sum_grad
         # pass in aggregate gradient and calculate the gradients
         # wrt this nodes inputs

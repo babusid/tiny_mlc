@@ -42,7 +42,7 @@ def build_graph():
 
     loss_graph = tmlc.Graph(inputs=[x, y_one_hot, W, b], outputs=[loss])
     grad_graph = tmlc.differentiate(graph=loss_graph, output_node=loss, target_nodes=[W, b])
-    train_graph = tmlc.Graph(inputs=grad_graph.inputs, outputs=[loss] + grad_graph.outputs)
+    train_graph = tmlc.Graph(inputs=grad_graph.inputs, outputs=[loss, *grad_graph.outputs])
     eval_graph = tmlc.Graph(inputs=[x, W, b], outputs=[logits])
     return x, W, b, y_one_hot, train_graph, eval_graph
 

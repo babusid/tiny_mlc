@@ -1,5 +1,4 @@
 from beartype.claw import beartype_this_package
-
 beartype_this_package()  # must precede submodule imports below to hook them
 
 from .ndarray import ndarray
@@ -22,15 +21,18 @@ from .ops.ops_shape import (
     transpose,
     zeros_like,
 )
-from .evaluator import run, gradients
+from .evaluator import run
+from .graph.graph import Graph
+from .graph.transforms.differentiate import differentiate
 
 __all__ = [
     "ndarray",
     "Tensor",
     "ConstantTensor",
     "TensorOp",
+    "Graph",
     "run",
-    "gradients",
+    "differentiate",
     "constant",
     "zeros",
     "ones",

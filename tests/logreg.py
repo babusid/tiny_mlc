@@ -40,19 +40,22 @@ def build_graph():
     correct_logit = tmlc.summation(logits * y_one_hot, axes=(1,))
     loss = tmlc.summation(log_partition - correct_logit, axes=(0,)) / BATCH_SIZE
 
-    grad_W, grad_b = tmlc.gradients(output_node=loss, target_nodes=[W, b])
-    return x, W, b, y_one_hot, logits, loss, grad_W, grad_b
+    loss_graph = tmlc.Graph(inputs=[x, y_one_hot, W, b], outputs=[loss])
+    grad_graph = tmlc.differentiate(graph=loss_graph, output_node=loss, target_nodes=[W, b])
+    train_graph = tmlc.Graph(inputs=grad_graph.inputs, outputs=[loss] + grad_graph.outputs)
+    eval_graph = tmlc.Graph(inputs=[x, W, b], outputs=[logits])
+    return x, W, b, y_one_hot, train_graph, eval_graph
 
 
 def main():
     rng = np.random.default_rng(0)
     X, y_one_hot = make_dataset(rng)
-    x, W, b, y_one_hot_node, logits, loss, grad_W, grad_b = build_graph()
+    x, W, b, y_one_hot_node, train_graph, eval_graph = build_graph()
 
     def forward_backward(W_val: np.ndarray, b_val: np.ndarray):
         loss_val, grad_W_val, grad_b_val = tmlc.run(
             inputs={x: X, y_one_hot_node: y_one_hot, W: W_val, b: b_val},
-            outputs=[loss, grad_W, grad_b],
+            graph=train_graph,
         )
         return loss_val[0], grad_W_val[0], grad_b_val[0]
 
@@ -81,7 +84,7 @@ def main():
         b_val = b_val - lr * grad_b_val
 
     final_loss, _, _ = forward_backward(W_val, b_val)
-    predicted_logits = tmlc.run(inputs={x: X, W: W_val, b: b_val}, outputs=[logits])[0][0]
+    predicted_logits = tmlc.run(inputs={x: X, W: W_val, b: b_val}, graph=eval_graph)[0][0]
     accuracy = np.mean(np.argmax(predicted_logits, axis=1) == np.argmax(y_one_hot, axis=1))
 
     print(f"initial loss: {initial_loss:.4f}")

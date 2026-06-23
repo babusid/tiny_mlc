@@ -10,21 +10,21 @@ b = a * z
 c = b * a
 out = c + a
 
+forward_graph = tmlc.Graph(inputs=[x, y, z], outputs=[a, b, c])
+
 output = tmlc.run(
     inputs={
         x: np.array([[1, 2], [3, 4]]),
         y: np.array([[5, 6], [7, 8]]),
         z: np.array([[1, 1], [1, 1]]),
     },
-    outputs=[a, b, c],
+    graph=forward_graph,
 )
 
 print(output)
 
-grads = tmlc.gradients(output_node=out, target_nodes=[a, b, c])
-a_grad = grads[0]
-b_grad = grads[1]
-c_grad = grads[2]
+diff_graph = tmlc.Graph(inputs=[x, y, z], outputs=[out])
+grad_graph = tmlc.differentiate(graph=diff_graph, output_node=out, target_nodes=[a, b, c])
 
 output = tmlc.run(
     inputs={
@@ -32,7 +32,7 @@ output = tmlc.run(
         y: np.array([[5, 6], [7, 8]]),
         z: np.array([[1, 1], [1, 1]]),
     },
-    outputs=[a_grad, b_grad, c_grad],
+    graph=grad_graph,
 )
 
 print(output)

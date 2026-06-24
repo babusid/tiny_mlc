@@ -1,55 +1,28 @@
 # tmlc — a tiny machine learning compiler
 
-`tmlc` is a small, from-scratch ML compiler/autograd system. The goal is learning, not
-performance or production use: build up a tensor compiler the way real ones work — IR, eager
-execution, reverse-mode autodiff, graph optimization passes, and (eventually) lowering to
-MLIR — one understandable layer at a time, without hiding the mechanics behind a library.
+`tmlc` is a small, from-scratch ML compiler/autograd system. The goal is to learn, but also to provide
+a very modifiable, hackable frontend ML compiler. There are a lot of GPU kernel DSLs out there today,
+each of which have their own pros and cons, but there's not many (to my knowledge) customizable frontends
+that deal with the higher levels of the stack.
 
-If you're modifying this repo, also read `TODO.md` for what's planned but not built yet.
+The idea behind TMLC is to provide a simple, strictly type-checked, and full-featured compiler that can
+compile arbitrary computational graphs. The user-facing API may be slightly more tedious than other,
+more established frameworks, but the hope is that the low level of abstraction and the tight typechecking
+(thanks beartype!) will help both humans and agents understand exactly how any given piece of code works.
+
+I try to manually maintain my README rather than have an agent do it, so this may lag a bit behind
+development. However, I typically comment a lot in the codebase, and I've intentionally been type-annotating everything.
+If this README doesn't cover a question, you should be able to just load the repo into Claude and ask questions!
+Feel free to submit feature requests or ideas via issue tickets, but no guarantees things get looked at, and I'm
+not going to accept unsolicited PRs at this time.
 
 ## Quickstart
 
-```python
-import numpy as np
-import tmlc
-
-x = tmlc.input(shape=(2, 2), label="x")
-y = tmlc.input(shape=(2, 2), label="y")
-z = x * y + 1
-
-output = tmlc.run(inputs={x: np.array([[1, 2], [3, 4]]), y: np.array([[5, 6], [7, 8]])}, outputs=[z])
-
-grad_x, = tmlc.gradients(output_node=z, target_nodes=[x])
-```
-
-`import tmlc` is the only import you need — it re-exports the op access functions (`add`,
-`mul`, `input`, `transpose`, ...), the `TensorOp` subclasses themselves (`Add`, `Mul`, `Input`,
-...) for type hints / `isinstance` checks, and `run`/`gradients` from the evaluator. The package
-also runs under `beartype` (`beartype_this_package()` in `__init__.py`), so type hints
-throughout `tmlc` are enforced at runtime, not just checked statically.
+See tests/logreg.py
 
 ## How it's put together
 
-- **`tensor.py`** — the IR. `Tensor` is a graph node (op + inputs + shape, no data). `TensorOp`
-  is the abstract interface every operation implements: `__call__` (build the node),
-  `infer_shape`, `compute` (eager numpy execution), `gradients` (local backward rule),
-  `emit_ir` (MLIR lowering — currently a stub everywhere, see `TODO.md`).
-- **`ops/ops_*.py`** — one file per category (`ops_basic`, `ops_arithmetic`, `ops_logarithmic`,
-  `ops_shape`). Each op is a `TensorOp` subclass plus a lowercase access function at the bottom
-  (e.g. `Mul` → `mul()`). The access function is the real public API — `TensorOp`s aren't meant
-  to be constructed by hand.
-- **`_operators.py`** — attaches `Tensor`'s dunders (`__add__`, `__matmul__`, `.T`, ...) onto the
-  class after the fact. This exists to break a real circular dependency: ops need `Tensor` as a
-  base class, and operators need ops. `tensor.py` stays ops-agnostic; this module wires the two
-  together once, at import time. See the comment above the `Tensor` class for the long version.
-- **`evaluator.py`** — `run()` does eager evaluation: topo-sort from the requested outputs,
-  execute each node's `compute()`. `gradients()` does reverse-mode autodiff: it prunes the graph
-  to just the nodes on the path between the output and the requested targets, then walks it in
-  reverse, accumulating and pushing gradients via each node's `op.gradients()`. `compile()` /
-  `run_compiled()` are unimplemented stubs — this is where graph-optimization passes and MLIR
-  codegen will eventually live.
-- **`ndarray.py`** — just a numpy alias today; the seam where a pluggable array backend
-  (numpy/cupy/etc.) would go.
+TODO
 
 ## What works right now
 
@@ -63,7 +36,6 @@ throughout `tmlc` are enforced at runtime, not just checked statically.
 
 ## What's not built yet
 
-MLIR emission, an actual `compile()`/`run_compiled()` path, graph optimization passes (dead
+Low-level IR emission, an actual `compile()`/`run_compiled()` path, graph optimization passes (dead
 code elimination, constant folding, CSE, op fusion), a real test suite (pytest isn't wired up —
-`tests/*.py` are runnable scripts, not pytest files), and a pluggable array backend. See
-`TODO.md` for the live list.
+`tests/*.py` are runnable scripts, not pytest files), and a pluggable array backend.
